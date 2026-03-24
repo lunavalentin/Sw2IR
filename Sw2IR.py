@@ -36,13 +36,14 @@ class ProcessingThread(QThread):
     log_signal = Signal(str)
     finished_signal = Signal()
 
-    def __init__(self, ref_path, out_path, duration, align, do_norm, sweep_files):
+    def __init__(self, ref_path, out_path, duration, align, do_norm, clean_noise, sweep_files):
         super().__init__()
         self.ref_path = ref_path
         self.out_path = out_path
         self.duration = duration
         self.align = align
         self.do_norm = do_norm
+        self.clean_noise = clean_noise
         self.sweep_files = sweep_files
         self.is_running = True
 
@@ -85,6 +86,15 @@ class ProcessingThread(QThread):
                     self.log_signal.emit(f"  Warning: Rate mismatch {fs} vs {fs_sweep}")
                 
                 if sig.ndim > 1: sig = sig[:, 0] # Mono
+
+                if self.clean_noise:
+                    # Remove 1s beginning and end to clean researcher movement
+                    trim_1s = int(1.0 * fs)
+                    if len(sig) > 2 * trim_1s:
+                        sig[:trim_1s] = 0
+                        sig[-trim_1s:] = 0
+                    else:
+                        self.log_signal.emit(f"  Warning: File too short to mute 1s from start and end")
 
                 if len(sig) > trim_samples:
                     sig = sig[:trim_samples]
@@ -434,7 +444,7 @@ class Sw2IR(QMainWindow):
         layout.addWidget(out_group)
 
         # Sweeps List
-        list_group = QGroupBox("Input Sweeps")
+        list_group = QGroupBox("Input Sweeps Responses")
         list_layout = QVBoxLayout()
         self.list_widget = DropListWidget()
         list_layout.addWidget(self.list_widget)
@@ -485,6 +495,11 @@ class Sw2IR(QMainWindow):
         self.norm_check.setChecked(True)
         # self.norm_check.setStyleSheet("") # Use global
         settings_layout.addWidget(self.norm_check)
+
+        self.clean_noise_check = QCheckBox("Mute 1s Edges", self)
+        self.clean_noise_check.setToolTip("Mute the first and last 1 second to remove recording handling noise")
+        self.clean_noise_check.setChecked(True)
+        settings_layout.addWidget(self.clean_noise_check)
 
         settings_layout.addStretch()
         settings_group.setLayout(settings_layout)
@@ -575,6 +590,7 @@ class Sw2IR(QMainWindow):
         dur = self.duration_spin.value()
         align = self.align_check.isChecked()
         norm = self.norm_check.isChecked()
+        clean = self.clean_noise_check.isChecked()
         
         sweeps = [self.list_widget.item(i).text() for i in range(self.list_widget.count())]
 
@@ -591,7 +607,7 @@ class Sw2IR(QMainWindow):
         self.process_btn.setEnabled(False)
         self.process_btn.setText("Processing...")
         
-        self.processing_thread = ProcessingThread(ref, out, dur, align, norm, sweeps)
+        self.processing_thread = ProcessingThread(ref, out, dur, align, norm, clean, sweeps)
         self.processing_thread.log_signal.connect(self.log)
         self.processing_thread.finished_signal.connect(self.processing_finished)
         self.processing_thread.start()
